@@ -7,23 +7,21 @@ from transformers import pipeline
 
 app = FastAPI(title="Guardian AI Render Service")
 
-# Define request schema
+# Request schema
 class QuestionRequest(BaseModel):
     question: str
 
-# Initialize summarizer
-summarizer = pipeline("summarization")
+# Use a smaller summarization model to save memory
+summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
 
 @app.post("/answer")
 def get_answer(data: QuestionRequest):
     try:
         question = data.question
-        # Example: simple search on Google via API or custom logic
         search_urls = search_web(question)
         if not search_urls:
             return {"answer": "Sorry, I could not find any information."}
 
-        # Crawl and summarize first valid page
         summary = ""
         for url in search_urls:
             page_text = crawl_page(url)
@@ -39,13 +37,14 @@ def get_answer(data: QuestionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def search_web(query, num_results=3):
-    # You can replace this with a proper Google Search API or Bing API
-    # For now, return some hardcoded URLs for testing
+    # Replace this with a proper search API in production
     return [
         "https://en.wikipedia.org/wiki/Cybersecurity",
         "https://www.cisa.gov/cybersecurity"
     ][:num_results]
+
 
 def crawl_page(url):
     try:
