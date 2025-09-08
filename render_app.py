@@ -4,23 +4,34 @@ from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+import os
 
-# ✅ New: lightweight summarizer
+# For summarization
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lsa import LsaSummarizer
+import nltk
+
+# ==============================
+# NLTK setup
+# ==============================
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt")
+    nltk.download("punkt_tab")
 
 app = FastAPI(title="Guardian AI Render Service")
 
 # ==============================
 # CONFIG
 # ==============================
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"
-GOOGLE_CX = "YOUR_GOOGLE_CX_ID"
-SERP_API_KEY = "YOUR_SERP_API_KEY"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "YOUR_GOOGLE_API_KEY")
+GOOGLE_CX = os.getenv("GOOGLE_CX", "YOUR_GOOGLE_CX_ID")  # Custom Search Engine ID
+SERP_API_KEY = os.getenv("SERP_API_KEY", "YOUR_SERP_API_KEY")
 
-GOOGLE_LIMIT = 100
-SERP_LIMIT = 3
+GOOGLE_LIMIT = 100  # daily free quota
+SERP_LIMIT = 3      # daily fallback quota
 
 # Usage trackers
 usage = {"google": 0, "serp": 0}
@@ -39,10 +50,11 @@ def reset_usage_if_needed():
         reset_time = datetime.now() + timedelta(days=1)
 
 def search_web(query, num_results=3):
+    """Try Google first, fallback to SerpAPI, then static URLs."""
     reset_usage_if_needed()
     urls = []
 
-    # 1. Google API
+    # 1. Google Programmable Search API
     if usage["google"] < GOOGLE_LIMIT:
         try:
             params = {"q": query, "key": GOOGLE_API_KEY, "cx": GOOGLE_CX, "num": num_results}
@@ -68,7 +80,7 @@ def search_web(query, num_results=3):
         except Exception:
             pass
 
-    # 3. Static fallback
+    # 3. Both quotas exhausted → fallback to static
     return [
         "https://en.wikipedia.org/wiki/Cybersecurity",
         "https://www.cisa.gov/cybersecurity"
@@ -86,16 +98,17 @@ def crawl_page(url):
     except:
         return ""
 
-# ✅ Replace HF with sumy
-def summarize_text(text, sentence_count=3):
+def summarize_text(text, sentences_count=3):
+    """Summarize text using Sumy LSA."""
     try:
         parser = PlaintextParser.from_string(text, Tokenizer("english"))
         summarizer = LsaSummarizer()
-        summary = summarizer(parser.document, sentence_count)
-        return " ".join([str(sentence) for sentence in summary])
+        summary = summarizer(parser.document, sentences_count)
+        return " ".join(str(sentence) for sentence in summary)
     except Exception as e:
         print(f"Summarization failed: {e}")
-        return ""
+        # fallback: return first 3 sentences if summarization fails
+        return " ".join(text.split(". ")[:3])
 
 # ==============================
 # ENDPOINT
