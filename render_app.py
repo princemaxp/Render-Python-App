@@ -3,106 +3,115 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
-import os
+from transformers import pipeline
+from datetime import datetime, timedelta
 
 app = FastAPI(title="Guardian AI Render Service")
 
-# HF Inference API token (set as secret on Render)
-HF_TOKEN = os.getenv("HF_TOKEN")  # Use your HF_TOKEN secret
+# ==============================
+# CONFIG
+# ==============================
+GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"
+GOOGLE_CX = "YOUR_GOOGLE_CX_ID"  # Custom Search Engine ID
+SERP_API_KEY = "YOUR_SERP_API_KEY"
 
-# Request schema
+GOOGLE_LIMIT = 100  # daily free quota
+SERP_LIMIT = 3      # daily fallback quota
+
+# Usage trackers
+usage = {"google": 0, "serp": 0}
+reset_time = datetime.now() + timedelta(days=1)
+
+# Initialize summarizer
+summarizer = pipeline("summarization")
+
 class QuestionRequest(BaseModel):
     question: str
 
-@app.post("/answer")
-def get_answer(data: QuestionRequest):
-    try:
-        question = data.question.strip()
-        if not question:
-            return {"answer": "Please provide a valid question."}
 
-        # Search the web using SerpAPI (replace with your API key or other search API)
-        search_urls = search_web(question)
-        if not search_urls:
-            return {"answer": "Sorry, no information was found."}
-
-        # Crawl and summarize the first valid page
-        summary = ""
-        for url in search_urls:
-            page_text = crawl_page(url)
-            if page_text:
-                summary = summarize_text(page_text)
-                break
-
-        if not summary:
-            summary = "Sorry, no valid content could be extracted."
-
-        return {"answer": summary}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# ==============================
+# HELPERS
+# ==============================
+def reset_usage_if_needed():
+    global reset_time, usage
+    if datetime.now() >= reset_time:
+        usage = {"google": 0, "serp": 0}
+        reset_time = datetime.now() + timedelta(days=1)
 
 
 def search_web(query, num_results=3):
-    """Search using SerpAPI or return fallback URLs."""
-    SERP_API_KEY = os.getenv("SERP_API_KEY")  # optional, set on Render
+    """Try Google first, fallback to SerpAPI, then static URLs."""
+    reset_usage_if_needed()
     urls = []
 
-    if SERP_API_KEY:
+    # 1. Google Programmable Search API
+    if usage["google"] < GOOGLE_LIMIT:
         try:
-            params = {
-                "q": query,
-                "api_key": SERP_API_KEY,
-                "num": num_results
-            }
-            response = requests.get("https://serpapi.com/search", params=params, timeout=5)
-            results = response.json().get("organic_results", [])
-            urls = [r["link"] for r in results if "link" in r]
-        except:
+            params = {"q": query, "key": GOOGLE_API_KEY, "cx": GOOGLE_CX, "num": num_results}
+            r = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=5)
+            results = r.json().get("items", [])
+            urls = [item["link"] for item in results if "link" in item]
+            if urls:
+                usage["google"] += 1
+                return urls[:num_results]
+        except Exception:
             pass
 
-    # Fallback URLs
-    if not urls:
-        urls = [
-            "https://en.wikipedia.org/wiki/Cybersecurity",
-            "https://www.cisa.gov/cybersecurity"
-        ][:num_results]
+    # 2. SerpAPI fallback
+    if usage["serp"] < SERP_LIMIT:
+        try:
+            params = {"q": query, "api_key": SERP_API_KEY, "num": num_results}
+            r = requests.get("https://serpapi.com/search", params=params, timeout=5)
+            results = r.json().get("organic_results", [])
+            urls = [r["link"] for r in results if "link" in r]
+            if urls:
+                usage["serp"] += 1
+                return urls[:num_results]
+        except Exception:
+            pass
 
-    return urls
+    # 3. Both quotas exhausted → fallback to static
+    return [
+        "https://en.wikipedia.org/wiki/Cybersecurity",
+        "https://www.cisa.gov/cybersecurity"
+    ][:num_results]
 
 
 def crawl_page(url):
-    """Get visible text from webpage."""
     try:
         response = requests.get(url, timeout=5)
         if response.status_code != 200:
             return ""
-        soup = BeautifulSoup(response.text, 'html.parser')
-        paragraphs = soup.find_all('p')
+        soup = BeautifulSoup(response.text, "html.parser")
+        paragraphs = soup.find_all("p")
         text = " ".join([p.get_text() for p in paragraphs])
         return text
     except:
         return ""
 
 
-def summarize_text(text):
-    """Summarize using HF Inference API to avoid loading large models."""
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": text, "parameters": {"max_new_tokens": 100}}
-
+# ==============================
+# ENDPOINT
+# ==============================
+@app.post("/answer")
+def get_answer(data: QuestionRequest):
     try:
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/sshleifer/distilbart-cnn-12-6",
-            headers=headers,
-            json=payload,
-            timeout=10
-        )
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and "summary_text" in result[0]:
-                return result[0]["summary_text"]
-            elif isinstance(result, dict) and "summary_text" in result:
-                return result["summary_text"]
-        return "Sorry, summarization failed."
-    except:
-        return "Sorry, summarization failed."
+        question = data.question
+        search_urls = search_web(question)
+
+        if not search_urls:
+            return {"answer": "Sorry, I could not find any information."}
+
+        # Crawl & summarize
+        for url in search_urls:
+            page_text = crawl_page(url)
+            if page_text:
+                try:
+                    summary = summarizer(page_text, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
+                    return {"answer": summary}
+                except Exception:
+                    continue
+
+        return {"answer": "Sorry, summarization failed."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
