@@ -43,7 +43,6 @@ def reset_usage_if_needed():
         usage = {"google": 0, "serp": 0}
         reset_time = datetime.now() + timedelta(days=1)
 
-
 def search_web(query, num_results=3):
     """Try Google first, fallback to SerpAPI, then static URLs."""
     reset_usage_if_needed()
@@ -81,7 +80,6 @@ def search_web(query, num_results=3):
         "https://www.cisa.gov/cybersecurity"
     ][:num_results]
 
-
 def crawl_page(url):
     try:
         response = requests.get(url, timeout=5)
@@ -93,6 +91,24 @@ def crawl_page(url):
         return text
     except:
         return ""
+
+def chunk_text(text, max_words=300):
+    """Split text into smaller chunks to avoid model max length issues."""
+    words = text.split()
+    for i in range(0, len(words), max_words):
+        yield " ".join(words[i:i+max_words])
+
+def summarize_text(text):
+    """Summarize text safely in chunks."""
+    summaries = []
+    for chunk in chunk_text(text):
+        try:
+            summary = get_summarizer()(chunk, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
+            summaries.append(summary)
+        except Exception as e:
+            print(f"Chunk summarization failed: {e}")
+            continue
+    return " ".join(summaries)
 
 # ==============================
 # ENDPOINT
@@ -113,12 +129,9 @@ def get_answer(data: QuestionRequest):
         for url in search_urls:
             page_text = crawl_page(url)
             if page_text:
-                try:
-                    summary = get_summarizer()(page_text, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
+                summary = summarize_text(page_text)
+                if summary:
                     return {"answer": summary}
-                except Exception as e:
-                    print(f"Summarization failed for {url}: {e}")
-                    continue
 
         return {"answer": "Sorry, summarization failed."}
     except Exception as e:
