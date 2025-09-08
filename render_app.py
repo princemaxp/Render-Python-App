@@ -5,21 +5,12 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import os
+import re
 
-# For summarization
+# Sumy for summarization
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lsa import LsaSummarizer
-import nltk
-
-# ==============================
-# NLTK setup
-# ==============================
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt")
-    nltk.download("punkt_tab")
 
 app = FastAPI(title="Guardian AI Render Service")
 
@@ -98,17 +89,32 @@ def crawl_page(url):
     except:
         return ""
 
-def summarize_text(text, sentences_count=3):
-    """Summarize text using Sumy LSA."""
+# ========== SUMMARIZATION ==========
+def clean_summary(summary: str) -> str:
+    """Remove irrelevant boilerplate like author/job titles from the summary."""
+    sentences = re.split(r'(?<=[.!?]) +', summary)
+    filtered = []
+    for s in sentences:
+        s_clean = s.strip()
+        # Skip junk/metadata
+        if re.search(r"(Staff Writer|Editorial|Content Lead|Reporter|Journalist)", s_clean, re.IGNORECASE):
+            continue
+        if len(s_clean.split()) < 5:  # skip very short lines
+            continue
+        filtered.append(s_clean)
+    return " ".join(filtered)
+
+def summarize_text(text, num_sentences=5):
+    """Summarize text safely and clean it up."""
     try:
         parser = PlaintextParser.from_string(text, Tokenizer("english"))
         summarizer = LsaSummarizer()
-        summary = summarizer(parser.document, sentences_count)
-        return " ".join(str(sentence) for sentence in summary)
+        summary = summarizer(parser.document, num_sentences)
+        raw_summary = " ".join(str(sentence) for sentence in summary)
+        return clean_summary(raw_summary)
     except Exception as e:
         print(f"Summarization failed: {e}")
-        # fallback: return first 3 sentences if summarization fails
-        return " ".join(text.split(". ")[:3])
+        return ""
 
 # ==============================
 # ENDPOINT
