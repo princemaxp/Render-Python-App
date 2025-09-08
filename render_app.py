@@ -5,15 +5,16 @@ import requests
 from bs4 import BeautifulSoup
 from transformers import pipeline
 from datetime import datetime, timedelta
+import os
 
 app = FastAPI(title="Guardian AI Render Service")
 
 # ==============================
 # CONFIG
 # ==============================
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"
-GOOGLE_CX = "YOUR_GOOGLE_CX_ID"  # Custom Search Engine ID
-SERP_API_KEY = "YOUR_SERP_API_KEY"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "YOUR_GOOGLE_API_KEY")
+GOOGLE_CX = os.getenv("GOOGLE_CX", "YOUR_GOOGLE_CX_ID")  # Custom Search Engine ID
+SERP_API_KEY = os.getenv("SERP_API_KEY", "YOUR_SERP_API_KEY")
 
 GOOGLE_LIMIT = 100  # daily free quota
 SERP_LIMIT = 3      # daily fallback quota
@@ -22,12 +23,16 @@ SERP_LIMIT = 3      # daily fallback quota
 usage = {"google": 0, "serp": 0}
 reset_time = datetime.now() + timedelta(days=1)
 
-# Initialize summarizer
-summarizer = pipeline("summarization")
+# Lazy load summarizer to save memory
+summarizer = None
+def get_summarizer():
+    global summarizer
+    if summarizer is None:
+        summarizer = pipeline("summarization", model="t5-small", tokenizer="t5-small")
+    return summarizer
 
 class QuestionRequest(BaseModel):
     question: str
-
 
 # ==============================
 # HELPERS
@@ -89,14 +94,16 @@ def crawl_page(url):
     except:
         return ""
 
-
 # ==============================
 # ENDPOINT
 # ==============================
 @app.post("/answer")
 def get_answer(data: QuestionRequest):
     try:
-        question = data.question
+        question = data.question.strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
         search_urls = search_web(question)
 
         if not search_urls:
@@ -107,9 +114,10 @@ def get_answer(data: QuestionRequest):
             page_text = crawl_page(url)
             if page_text:
                 try:
-                    summary = summarizer(page_text, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
+                    summary = get_summarizer()(page_text, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
                     return {"answer": summary}
-                except Exception:
+                except Exception as e:
+                    print(f"Summarization failed for {url}: {e}")
                     continue
 
         return {"answer": "Sorry, summarization failed."}
