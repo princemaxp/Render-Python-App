@@ -3,4 +3,5 @@ uvicorn==0.23.2
 requests==2.31.0
 beautifulsoup4==4.12.2
 transformers==4.36.2
-torch
+torch==2.8.0+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
