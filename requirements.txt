@@ -1,8 +1,5 @@
-Flask==2.3.2
+fastapi==0.100.0
+uvicorn==0.23.2
 requests==2.31.0
-sentence-transformers==2.2.2
-gradio==3.44.0
-fastapi
-uvicorn
-requests
-beautifulsoup4
+beautifulsoup4==4.12.2
+transformers==4.42.0
