@@ -3,7 +3,6 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
-from transformers import pipeline
 from datetime import datetime, timedelta
 import os
 
@@ -15,6 +14,7 @@ app = FastAPI(title="Guardian AI Render Service")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "YOUR_GOOGLE_API_KEY")
 GOOGLE_CX = os.getenv("GOOGLE_CX", "YOUR_GOOGLE_CX_ID")  # Custom Search Engine ID
 SERP_API_KEY = os.getenv("SERP_API_KEY", "YOUR_SERP_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")  # Hugging Face API Token
 
 GOOGLE_LIMIT = 100  # daily free quota
 SERP_LIMIT = 3      # daily fallback quota
@@ -22,14 +22,6 @@ SERP_LIMIT = 3      # daily fallback quota
 # Usage trackers
 usage = {"google": 0, "serp": 0}
 reset_time = datetime.now() + timedelta(days=1)
-
-# Lazy load summarizer to save memory
-summarizer = None
-def get_summarizer():
-    global summarizer
-    if summarizer is None:
-        summarizer = pipeline("summarization", model="t5-small", tokenizer="t5-small")
-    return summarizer
 
 class QuestionRequest(BaseModel):
     question: str
@@ -92,23 +84,23 @@ def crawl_page(url):
     except:
         return ""
 
-def chunk_text(text, max_words=300):
-    """Split text into smaller chunks to avoid model max length issues."""
-    words = text.split()
-    for i in range(0, len(words), max_words):
-        yield " ".join(words[i:i+max_words])
-
-def summarize_text(text):
-    """Summarize text safely in chunks."""
-    summaries = []
-    for chunk in chunk_text(text):
-        try:
-            summary = get_summarizer()(chunk, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
-            summaries.append(summary)
-        except Exception as e:
-            print(f"Chunk summarization failed: {e}")
-            continue
-    return " ".join(summaries)
+def summarize_text(text: str) -> str:
+    """Use Hugging Face Inference API for summarization."""
+    if not HF_TOKEN:
+        return "HF_TOKEN not configured."
+    try:
+        HF_API_URL = "https://api-inference.huggingface.co/models/sshleifer/distilbart-cnn-12-6"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        payload = {"inputs": text, "parameters": {"max_length": 150, "min_length": 50}}
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            return response.json()[0]["summary_text"]
+        else:
+            print(f"HF API error: {response.text}")
+            return ""
+    except Exception as e:
+        print(f"Summarization failed: {e}")
+        return ""
 
 # ==============================
 # ENDPOINT
