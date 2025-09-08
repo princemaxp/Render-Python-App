@@ -2,7 +2,5 @@ fastapi==0.100.0
 uvicorn==0.23.2
 requests==2.31.0
 beautifulsoup4==4.12.2
-
-# Add for summarization
 transformers==4.36.2
-torch==2.2.0
+torch
